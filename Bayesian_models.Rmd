@@ -1,0 +1,248 @@
+---
+title: "Ecology Center Data Science Workshop: Bayesian models"
+author: "Annie Schiffer"
+date: "Last updated: `r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+---
+# Notes for next time!
+
+- stan code to look up priors in brms
+- show difference between brms priors and stan priors
+- explain how much priors affect data with small data sets
+- look up shiny stan
+
+# Outline
+
+1. Why use Bayesian models for inference?
+2. New terms: priors and posterior
+3. How to build a Bayesian model in `rstan`
+4. Shortcut: `brms`
+
+
+# 1. Why use Bayesian models for inference?
+
+## Complexity
+
+- From a practical standpoint, Bayesian approach handles complex models better than frequentist approach. 
+- Bayesian models can be more flexible and it's often easier to build hierarchical or nested models and propagate uncertainty, especially if you have low sample sizes.
+- *Example:* species in plots in sites
+- At the same time, it's more forgiving: in a frequentist approach, maximum likelihood estimation requires certain assumptions, whereas in a Bayesian approach, you're estimating parameters with simulations.
+
+## Uncertainty
+
+- Uncertainty in a model estimate is different, and arguably more intuitive, in a Bayesian framework compared to a frequentist framework. 
+
+## Prior information
+
+- Bayesian models allow for prior knowledge of the parameter you're estimating. 
+- *Example:* Estimating lambda for counts of deer in a year. Frequentist method says: the number of deer in a year could be any number between $-\infty$ and $\infty$. Bayesian method says: the number of deer in year is around 10, with uncertainty around that number.
+
+## When might a frequentist framework be better?
+
+- While it's an increasingly popular method, Bayesian inference may not be right for all projects.
+- Bayesian models can be very time intensive and require lots of trial and error to get it to run.
+- If you have a question that can be answered with a relatively simple, straightforward model, that's great and a frequentist model may be better.
+
+## A quick note on inference vs. prediction
+
+People like Bayesian models for prediction because of the "updating" aspect of Bayesian models. You can essentially update your parameter estimates as you get new information, so it's great for forecasting/prediction.
+
+# 2. New terms: priors and posterior
+
+## Priors
+
+The estimates for your parameters of interest (i.e. $\beta_0$ and $\beta_1$ in the model above) will be affected by the data *AND* your priors. As a general rule, make your priors uninformative and see how the model runs. We want uninformative priors because your "guess" about the parameter may be way off and you could mess up your model fitting. It's a safer bet to have uninformative priors.
+
+### Quick recap of math notation and example model:
+
+Let's say you're looking at the effect of $x$ on $y$, for example the effect of family income on a student's SAT scores. You would model it with: 
+
+$$ score \sim \mathrm{Normal}{(\mu,\sigma)} $$
+
+$$ \mu = \beta_0 + \beta_1 income $$
+
+### Frequentist perspective on the parameter: 
+
+$\beta_1$ can be any number from $-\infty$ to $\infty$.
+
+### Bayesian perspective on the parameter:
+
+Estimating an effect of x on y. What are the possible values for the effect?
+
+$$ \beta_1 \sim \mathrm{Normal}{(\mu,\sigma)} $$
+
+$$ \beta_1 \sim \mathrm{Normal}{(0,100)} $$
+
+
+## Posterior
+
+Frequentist:
+
+- effect of $x$ on $y$ is a point estimate ($\beta_1$=0.5)
+- the point estimate is estimated with maximum likelihood
+- uncertainty around the estimate can be calculated with confidence intervals
+
+Bayesian:
+
+- effect and uncertainty wrapped into one thing: a distribution
+- this distribution is the posterior
+- the posterior is estimated by simulations that sample a range of possible parameter values
+- replicate simulations converge on the same set of parameter values (shown by overlapping chains, explained more below)
+
+![](posterior.jpg) 
+
+
+# 3. How to build a Bayesian model in rstan
+
+Stan is a different language, and model syntax will be closer to mathematical notation than lme4 or other frequentist package syntax.
+
+Components of stan model:
+
+1. Data
+2. Parameters
+3. Model
+
+
+```{r,message=FALSE,warning=FALSE}
+# install.packages("Sleuth3")
+# install.packages("rstan")
+library(Sleuth3)
+library(rstan)
+scores <- case1201
+
+# response variable = SAT score
+# predictor variable = income
+
+my.model <- c("
+data {
+    int<lower=0> N; // number of observations
+    vector[N] y; // response variable
+    vector[N] x; // predictor variable
+}
+
+parameters {
+    real beta0; // beta0
+    real beta1; // beta1
+    real<lower=0> sigma; // sigma in normal distribution
+}
+
+model {
+    // Normal sampling distribution
+    for(i in 1:N){
+      y[i] ~ normal(beta0 + beta1 * x[i], sigma); // linear model
+    }
+  
+    // priors
+    beta0 ~ normal(0,100);
+    beta1 ~ normal(0,100);
+    sigma ~ normal(0,100);
+}
+")
+```
+
+
+Now we specify the data and run it.
+
+```{r}
+# set up stan
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+# add data as a list object - names should match stan model
+my.data <- list(N=nrow(scores),
+             x=scores$Income,
+             y=scores$SAT)
+
+# run the model
+model.fit <- stan(model_code = my.model, data=my.data)
+```
+
+Let's make sure our model converged well. To do that, we look at chains and rhats. Chains show the sampling of the posterior distribution. The model has converged if the chains are overlapping. We check this with `traceplot()`
+
+```{r}
+traceplot(model.fit)
+```
+
+Looks good! Let's also look at the rhats. Rhats close to 1 mean the model converged. Any rhats over 1.05 means you should probably increase the number of iterations for sampling or make the priors more informative (narrower).
+
+```{r}
+model.fit
+```
+
+Rhats are all 1. Now let's look at our results. We can plot the posteriors.
+
+```{r,message=FALSE}
+plot(model.fit,pars=c("beta0"))
+plot(model.fit,pars=c("beta1"))
+```
+
+# 4. Modeling shortcut: `brms`
+
+Another package for running Bayesian models is `brms`. This package uses `lme4` syntax and writes the stan code for you. This will look very familiar if you've ever built a linear model in `lme4` or a generalized linear model in `glmmTMB`.
+
+```{r,message=FALSE,warning=FALSE}
+# install.packages("brms")
+library(brms)
+```
+```{r}
+# same model as above, but in brms
+brms.model <- brm(SAT ~ Income, data=scores,
+                  prior = prior(normal(0,100),class="Intercept"))
+```
+
+Let's take a look at the traceplots and rhats.
+
+```{r}
+# traceplots
+plot(brms.model)
+# summary
+brms.model
+stancode(brms.model)
+get_prior(brms.model)
+```
+
+Here's an example of a `brms` model with a response variable with Poisson likelihood (i.e. count data).
+
+```{r}
+salamanders <- case2202
+brms.poisson <- brm(Salamanders ~ ForestAge + PctCover, data=salamanders,
+                    family=poisson())
+```
+
+Let's look at the traceplots and rhats.
+
+```{r}
+# traceplots
+plot(brms.poisson)
+# output
+brms.poisson
+```
+
+Okay so we've got some really bad rhats. What do we do about that?
+
+## Model convergence
+
+If you're having issues with model convergence, there are a few things you could try, in this order:
+
+1. increase the number of iterations (add argument `iter = ` and set it to a larger number)
+2. make the priors more informative (make the standard deviation in the prior smaller, like 10 instead of 100)
+3. do a posterior predictive check to determine if our model is a good fit for the data (see https://avehtari.github.io/BDA_R_demos/demos_rstan/ppc/poisson-ppc.html for an example of a posterior predictive check on a poisson distribution)
+
+Don't be discouraged if you're having a hard time with convergence! Bayesian models take a lot of trial and error, and they can have a long run time. If you're having lots of trouble with a model, feel free to set up an appointment with Alice Carter (the stats consultant for the EC) or the code mentoring committee.
+
+# More details on sampling (MCMC)
+
+Markov Chain Monte Carlo is the simulations we use to get a distribution of possible parameter values.
+
+Imagine a ball rolling around in a bowl. The bowl is the distribution for the parameter (the ball returns to the center). You stop the ball and record those parameter values, then you release it.
+
+- Markov chain = the previous set of parameter values are the starting point for the next set of parameter values
+- Monte Carlo = a random "throw" to get the new set of parameter values
+
+https://chi-feng.github.io/mcmc-demo/app.html?algorithm=HamiltonianMC&target=standard  
+
+This is the part that is both very time intensive and requires a lot of fiddling. To make sure it sufficiently sampled the "bowl" aka parameter space, we look at the chains (more on that later).
